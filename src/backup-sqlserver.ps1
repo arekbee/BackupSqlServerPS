@@ -17,7 +17,6 @@ function CheckInit-SqlServerSMO
     }
 }
 
-
 function Export-SqlServerLogs
 {
     param(
@@ -38,19 +37,17 @@ function Export-SqlServerLogs
     
     $server.ReadErrorLog() | ConvertTo-Csv -Delimiter $delimiter  -notypeinformation | Out-File  -filepath $log_output_path -encoding ASCII -Force
     
-    Write-Host "Path to log file is $log_output_path"
-   
+    Write-Host "Path to log file is $log_output_path"  
 }
-
 
 Function Export-SqlServerJobsLog
 {
      param(
-        [ Microsoft.SqlServer.Management.SMO.Server]$srv
-        ,
-        [string]$outpath
-        , 
-        [string]$Delimiter = ','
+            [ Microsoft.SqlServer.Management.SMO.Server]$srv
+            ,
+            [string]$outpath
+            , 
+            [string]$Delimiter = ','
         )
    
         $outpath_log = "$outpath\SQLAGENT.csv"
@@ -62,6 +59,24 @@ Function Export-SqlServerJobsLog
         $srv.JobServer.ReadErrorLog() | Export-Csv -Path $outpath_log  -NoTypeInformation -Force -Delimiter $Delimiter 
         
         Write-Host "Path to job log file is $log_output_path"
+}
+
+function Export-SqlServerJobs
+{
+    param(
+    [ Microsoft.SqlServer.Management.SMO.Server]$srv
+    ,
+    [string]$outpath_job 
+    
+    )
+    #Export-SqlServerJobsLog $srv $outpath_job 
+
+    
+    $jobs = $srv.JobServer.Jobs 
+    $scripter = get-SqlServerScripter $srv 'definition'
+    $scripterDrop = get-SqlServerScripter $srv 'drop'
+    
+    Write-SqlSmoObject    $jobs "$outpath_job\definition\"   $scripter $scripterDrop
 }
 
 function In-Quotes(
@@ -159,10 +174,6 @@ function Export-SqlServerData
             }
         
         }
-        $adapter = New-Object System.Data.SqlClient.SqlDataAdapter
-        $adapter.SelectCommand = $cmd
-        $dataset = New-Object System.Data.DataSet
-        $adapter.Fill($dataset)
     }
     Finally
     { 
@@ -172,94 +183,6 @@ function Export-SqlServerData
     }
 }
 
-
-
-
-
-
-
-function CopyObjectsToFiles($objects, $outDir, [Microsoft.SqlServer.Management.SMO.Scripter]$scripter) {
-    #clear out before 
-
-    if(Test-Path $outDir)
-    {
-        Remove-Item $outDir* -Force -Recurse 
-    }
-    
-    #if (-not (Test-Path $outDir)) {
-        [System.IO.Directory]::CreateDirectory($outDir) 
-    #}
-   
-
-    foreach ($o in $objects) { 
-
-        if ($o -ne $null) {
-            $schemaPrefix = ""
-
-            if ($o.Schema -ne $null -and $o.Schema -ne "") {
-                $schemaPrefix = $o.Schema + "."
-            }
-
-            #removed the next line so I can use the filename to drop the stored proc 
-            #on the destination and recreate it
-            $scripter.Options.FileName = $outDir + $schemaPrefix + $o.Name + ".sql"
-            #$scripter.Options.FileName = $outDir + $schemaPrefix + $o.Name
-            Write-Host "Writing " $scripter.Options.FileName
-            
-            if($scripter.Options.ScriptData)
-            {
-                $result = $scripter.EnumScript($o)
-            }
-            else
-            {
-                $result = $scripter.Script($o) 
-            }          
-        }
-    }
-}
-
-function Get-SqlServerScripter
-{
-    param([Microsoft.SqlServer.Management.SMO.Server]$srv)
-
-    $scripter   = New-Object Microsoft.SqlServer.Management.SMO.Scripter($srv)
-    #region scripter
-    # Set scripter options to ensure only data is scripted
-    #$scripter.Options.ScriptSchema     = $true
-    $scripter.Options.ScriptData       = $True
-    #$scripter.Options.ScriptDrops      = $True
-    #$scripter.Options.IncludeHeaders   = $True
-    $scripter.Options.WithDependencies  = $true
-    $scripter.Options.IncludeDatabaseContext = $true
-    $scripter.Options.NoCommandTerminator = $true
-
-
-    #Exclude GOs after every line
-    #$scripter.Options.NoCommandTerminator   = $false
-    #$scripter.Options.ToFileOnly            = $true
-    #$scripter.Options.AllowSystemObjects    = $false
-    #$scripter.Options.Permissions           = $true
-    #$scripter.Options.DriAllConstraints     = $true
-    #$scripter.Options.SchemaQualify         = $true
-    #$scripter.Options.AnsiFile              = $true
-
-    #$scripter.Options.SchemaQualifyForeignKeysReferences = $true
-
-    #$scripter.Options.Indexes               = $true
-    #$scripter.Options.DriIndexes            = $true
-    #$scripter.Options.DriClustered          = $true
-    #$scripter.Options.DriNonClustered       = $true
-    #$scripter.Options.NonClusteredIndexes   = $true
-    #$scripter.Options.ClusteredIndexes      = $true
-    #$scripter.Options.FullTextIndexes       = $true
-    #$scripter.Options.ToFileOnly            =$true
-
-
-    #$scripter.Options.EnforceScriptingOptions   = $true
-    #endregion scripter
-
-    return $scripter
-}
 
 function Export-SqlServerDefinition
 {
@@ -274,7 +197,8 @@ function Export-SqlServerDefinition
     $tbl        = New-Object ("Microsoft.SqlServer.Management.SMO.Table")
     $db         = $srv.Databases[$database]
     
-     $scripter    = Get-SqlServerScripter $srv
+     $scripter    = Get-SqlServerScripter $srv 'definition'
+     $scripterDrop = Get-SqlServerScripter $srv  'drop'
      
     [ScriptBlock]$schemaFiltrator = { $_.schema -eq $schema  -and -not $_.IsSystemObject }
 
@@ -288,43 +212,199 @@ function Export-SqlServerDefinition
     $udtts_path         = "$output_path_schema\udtt\"
     
     
-    $tbl            = $db.tables | Where-object $schemaFiltrator 
-    $storedProcs    = $db.StoredProcedures | Where-object $schemaFiltrator  
-    $views          = $db.Views | Where-object { $_.schema -eq $schema }  #checkit 
+    $tbl            = $db.tables | Where-object $schemaFiltrator  
+    $storedProcs    = $db.StoredProcedures | Where-object $schemaFiltrator   
+    $views          = $db.Views | Where-object $schemaFiltrator    
     $udfs           = $db.UserDefinedFunctions | Where-object $schemaFiltrator 
-    $catlog         = $db.FullTextCatalogs
+    $catlog         = $db.FullTextCatalogs 
     $udtts          = $db.UserDefinedTableTypes | Where-object $schemaFiltrator  
     
     # Output the scripts
-    CopyObjectsToFiles $tbl $table_path $scripter 
-    CopyObjectsToFiles $storedProcs $storedProcs_path $scripter 
-    CopyObjectsToFiles $views $views_path $scripter 
-    CopyObjectsToFiles $catlog $textCatalog_path $scripter 
-    CopyObjectsToFiles $udtts $udtts_path $scripter 
-    CopyObjectsToFiles $udfs $udfs_path $scripter 
+    Write-SqlSmoObject $tbl $table_path $scripter $scripterDrop 
+    Write-SqlSmoObject $storedProcs $storedProcs_path $scripter $scripterDrop  
+    Write-SqlSmoObject $views $views_path $scripter  $scripterDrop 
+    Write-SqlSmoObject $catlog $textCatalog_path $scripter $scripterDrop 
+    Write-SqlSmoObject $udtts $udtts_path $scripter  $scripterDrop 
+    Write-SqlSmoObject $udfs $udfs_path $scripter  $scripterDrop 
     
     $scripter 
 }
 
 
-
-
-
-function Export-SqlServerJobs
+function Export-SqlServerDataInserts
 {
     param(
-    [ Microsoft.SqlServer.Management.SMO.Server]$srv
-    ,
-    [string]$outpath_job 
-    
+        [Microsoft.SqlServer.Management.SMO.Server]$srv,
+        [string]$output_path,
+        #[Microsoft.SqlServer.Management.SMO.Database]$db,
+        [string]$schema         = "dbo"
     )
-    #Export-SqlServerJobsLog $srv $outpath_job 
-
     
-    $jobs = $srv.JobServer.Jobs | select -first 1
-    $scripter = get-SqlServerScripter $srv
-    CopyObjectsToFiles    $jobs "$outpath_job\definition\"   $scripter
+    $db         = New-Object ("Microsoft.SqlServer.Management.SMO.Database")
+    $tbl        = New-Object ("Microsoft.SqlServer.Management.SMO.Table")
+    $db         = $srv.Databases[$database]
+    
+     $scripterData    = Get-SqlServerScripter $srv 'data'
+     
+    $insertData_output_path = "$output_path\$schema\inserts\"
+
+    $tbl  = $db.tables | Where-object {$_.schema -eq $schema  -and -not $_.IsSystemObject  }
+    
+    Write-SqlSmoObject $tbl $insertData_output_path $scripterData  
+    $scripter 
 }
+
+
+
+function Write-SqlSmoObject
+{
+[CmdletBinding()]
+param(
+[ValidateNotNull()]
+$objects
+, 
+[ValidateNotNullOrEmpty()]
+[string]
+$outDir
+, 
+[ValidateNotNull()]
+[Microsoft.SqlServer.Management.SMO.Scripter]
+$scripter
+, 
+[Microsoft.SqlServer.Management.SMO.Scripter]
+$scripterDrop = $null
+) 
+
+
+    if(Test-Path $outDir)
+    {
+        Remove-Item $outDir* -Force -Recurse 
+    }
+    
+    if (-not (Test-Path $outDir)) {
+        $cOutDir = [System.IO.Directory]::CreateDirectory($outDir) 
+        Write-Host "Dir $cOutDir is creted"
+    }
+
+    foreach ($o in $objects) { 
+        if ($o -ne $null) {
+            try
+            {
+                $schemaPrefix = ""
+
+                if ($o.Schema -ne $null -and $o.Schema -ne "") {
+                    $schemaPrefix = $o.Schema + "."
+                }
+
+                $scripter.Options.FileName = $outDir + $schemaPrefix + $o.Name + ".sql"
+                Write-Host "Writing " $scripter.Options.FileName
+                
+                
+                if($scripterDrop -ne $null)
+                {
+                    $scripterDrop.Options.FileName = $scripter.Options.FileName 
+                    $resultDrop = $scripterDrop.Script($o)
+                }
+                
+                if($scripter.Options.ScriptData)
+                {
+                    $result = $scripter.EnumScript($o)
+                }
+                else
+                {
+                    $result = $scripter.Script($o) 
+                } 
+             }
+             catch{
+                $ErrorMessage = $_.Exception.Message
+                $FailedItem = $_.Exception.ItemName
+             }            
+        }
+    }
+}
+
+function Get-SqlServerScripter
+{
+    [CmdletBinding()]
+    param(
+    
+    [Parameter(Position=1,Mandatory=$true)]
+    [ValidateNotNull()]
+    [Microsoft.SqlServer.Management.SMO.Server]
+    $srv 
+    ,
+    
+    [Parameter(Position=2,Mandatory=$false)]
+    [ValidateSet('data','definition', 'drop', 'assemblies')]
+    [string]
+    $scripterType = 'definition')
+
+    $scripter   = New-Object Microsoft.SqlServer.Management.SMO.Scripter($srv)
+    #https://msdn.microsoft.com/en-us/library/microsoft.sqlserver.management.smo.scriptingoptions.aspx
+    $scripter.Options.IncludeDatabaseContext = $false # 'use' on top
+    $scripter.Options.WithDependencies       = $false #dep. all
+    $scripter.Options.AllowSystemObjects = $False #system object
+    $scripter.Options.IncludeHeaders   = $True  #date and time of generation.
+    $scripter.Options.NoCommandTerminator = $false #GO seperator
+    $scripter.Options.AppendToFile = $True #for multiple files
+    $scripter.Options.ScriptSchema     = $true #use schema
+    
+    $scripter.Options.ToFileOnly            = $true  # only file
+    $scripter.Options.AnsiFile              = $true
+    $scripter.Options.SchemaQualify         = $true
+
+
+    if($scripterType -eq 'data') 
+    {
+        $scripter.Options.ScriptSchema             = $false #use schema
+        $scripter.Options.DriAll                   = $false
+        $scripter.Options.ScriptData               = $True
+        $scripter.Options.NoIdentities             = $true  
+        $scripter.Options.IncludeHeaders           = $false
+        $scripter.Options.DriIncludeSystemNames    = $false
+                
+    }
+    elseif ($scripterType -eq 'drop') 
+    {
+        $scripter.Options.ScriptDrops        = $True  #drops
+        $scripter.Options.IncludeIfNotExists = $True #check if exist
+
+    }
+    elseif($scripterType -eq 'assemblies')
+    {
+        $scripter.Options.NoAssemblies = $false
+    }
+    elseif( $scripterType  -eq 'Statistics')
+    {
+        $scripter.Options.Statistics  = $true
+    }
+    elseif($scripterType  -eq  'definition')
+    {
+        
+        $scripter.Options.DriAll                = $true
+        $scripter.Options.Indexes               = $True #indexes are included in the generated script.
+        $scripter.Options.Indexes               = $true
+        $scripter.Options.DriIndexes            = $true
+        $scripter.Options.DriClustered          = $true
+        $scripter.Options.DriNonClustered       = $true
+        $scripter.Options.DriAllConstraints     = $true
+        $scripter.Options.NonClusteredIndexes   = $true  # non-clustered indexes are included in the generated script.
+        $scripter.Options.ClusteredIndexes      = $true
+        $scripter.Options.FullTextIndexes       = $true
+        
+        $scripter.Options.EnforceScriptingOptions = $true
+        $scripter.Options.Triggers              = $true
+        $scripter.Options.Permissions           = $true
+        #$scripter.Options.NoTablePartitioningSchemes  = $true
+        $scripter.Options.SchemaQualifyForeignKeysReferences = $true    #schema-qualified table references for foreign key constraints are included in the generated script. 
+        
+    }
+
+
+
+    return $scripter
+}
+
 
 
 
@@ -332,12 +412,24 @@ function Export-SqlServerJobs
 function Backup-SqlServer
 {
     param(
-        [string]$server         = "localhost",
-        [string]$database       = "myDb",
-        [string]$output_path    = "C:\backup\db_schema_backup",
-        [string]$login          = "SqlServerUser",
-        [string]$password       = "123",
-        [string]$schema         = "dbo"
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $server         =  "localhost",
+         [ValidateNotNullOrEmpty()]
+        [string]
+        $database       = "myDb",
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $output_path    = "C:\backup\db_schema_backup",
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $login          = "SqlServerUser",
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $password       = "123",
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $schema         = "dbo"
     )
 
 CheckInit-SqlServerSMO
@@ -355,20 +447,19 @@ Try {
 
 
     $output_path_db = "$output_path\$database"
-
     
-    #Export-SqlServerLogs  $srv $output_path_db
-    #Export-SqlServerData $srv $output_path_db $database $schema
-    #Export-SqlServerDataInserts 
+    Export-SqlServerLogs  $srv $output_path_db
+    Export-SqlServerData $srv $output_path_db $database $schema
+    
     Export-SqlServerJobs $srv "$output_path\jobs"
-    #Export-SqlServerDefinition  $srv $output_path_db  $schema
-    
+    Export-SqlServerDefinition  $srv $output_path_db  $schema
+   
+    Export-SqlServerDataInserts  $srv $output_path_db $schema
+    #Export-SqlServerSMO @($db,$srv) @("database", "server", )
 }
 Finally {
-    #$srv.ConnectionContext.Disconnect()
+    $srv.ConnectionContext.Disconnect()
 }
-
-#Export-SqlServerSMO @($db,$srv) @("database", "server", )
 }
 
 
