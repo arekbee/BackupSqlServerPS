@@ -71,9 +71,7 @@ function In-Quotes(
     )
 {
     [string]$inner = $arr -join ('"' + $delimiter + '"')
-
-    [string]$outer = '"' + $headersStrings + '"'
-    
+    [string]$outer = '"' + $inner + '"'
     return $outer
 }
 
